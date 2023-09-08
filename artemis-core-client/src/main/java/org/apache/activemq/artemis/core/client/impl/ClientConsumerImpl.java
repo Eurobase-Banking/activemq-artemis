@@ -1134,12 +1134,17 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
             logger.debug("Message expired");
          }
       } else {
-         long t = System.currentTimeMillis();
          long expiration = m.getExpiration();
-         long diff = t - expiration;
-         expired = diff > EXPIRY_TOLERANCE;
-         if (expired && logger.isDebugEnabled()) {
-            logger.debug("Message expired: " + diff);
+         // Handle no expiry
+         if (expiration <= 0) {
+            expired = false;
+         } else {
+            long t = System.currentTimeMillis();
+            long diff = t - expiration;
+            expired = diff > EXPIRY_TOLERANCE;
+            if (expired && logger.isDebugEnabled()) {
+               logger.debug("Message expired: " + diff);
+            }
          }
       }
       return expired;
