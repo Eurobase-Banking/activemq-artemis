@@ -334,7 +334,7 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
                   }
                }
                // if we have already pre acked we can't expire
-               boolean expired = m.isExpired();
+               boolean expired = isExpired(m);
 
                flowControlBeforeConsumption(m);
 
@@ -971,7 +971,7 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
                return;
             }
 
-            boolean expired = message.isExpired();
+            boolean expired = isExpired(message);
 
             flowControlBeforeConsumption(message);
 
