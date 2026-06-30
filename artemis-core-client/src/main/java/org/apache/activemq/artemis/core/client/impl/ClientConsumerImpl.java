@@ -59,7 +59,8 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
    private static final int NUM_PRIORITIES = 10;
 
    public static final SimpleString FORCED_DELIVERY_MESSAGE = SimpleString.of("_hornetq.forced.delivery.seq");
-
+      /** If set then messages only expire if the diff is greater than this. */
+   private static final int EXPIRY_TOLERANCE = Integer.getInteger("artemis.clientExpiryTolerance", -1);
    private final ClientSessionInternal session;
 
    private final SessionContext sessionContext;
@@ -188,6 +189,7 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
       if (logger.isTraceEnabled()) {
          logger.trace("{}:: being created at", this, new Exception("trace"));
       }
+      logger.info("Expiry tolerance set to [" + EXPIRY_TOLERANCE + "]");
    }
 
    // ClientConsumer implementation
@@ -1117,6 +1119,33 @@ public final class ClientConsumerImpl implements ClientConsumerInternal {
       logger.trace("{}::Acking message {}", this, message);
 
       session.acknowledge(this, message);
+   }
+
+   /**
+    * If EXPIRY_TOLERANCE is not set then delegate to Message.isExpired().
+    * Otherwise return true if the difference between Message.getExpiration()
+    * and the current time is greater than EXPIRY_TOLERANCE.
+    * @param m received message
+    * @return true if not expired
+    */
+   private boolean isExpired(final Message m) {
+      boolean expired = m.isExpired();
+      if (expired)  {
+         if (EXPIRY_TOLERANCE != -1) {
+            long expiration = m.getExpiration();
+            long t = System.currentTimeMillis();
+            long diff = t - expiration;
+            expired = diff > EXPIRY_TOLERANCE;
+            if (expired && logger.isDebugEnabled()) {
+               logger.debug("Message expired: " + diff);
+            }
+         } else {
+            if (logger.isDebugEnabled()) {
+               logger.debug("Message Expired");
+            }
+         }
+      }
+      return expired;
    }
 
    @Override
