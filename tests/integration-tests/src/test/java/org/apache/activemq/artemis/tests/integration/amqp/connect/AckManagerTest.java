@@ -46,6 +46,7 @@ import org.apache.activemq.artemis.core.server.Queue;
 import org.apache.activemq.artemis.core.server.impl.AckReason;
 import org.apache.activemq.artemis.core.server.impl.ActiveMQServerImpl;
 import org.apache.activemq.artemis.core.server.impl.AddressInfo;
+import org.apache.activemq.artemis.core.server.impl.QueueImpl;
 import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
 import org.apache.activemq.artemis.logs.AssertionLoggerHandler;
 import org.apache.activemq.artemis.protocol.amqp.broker.ActiveMQProtonRemotingConnection;
@@ -184,16 +185,16 @@ public class AckManagerTest extends ActiveMQTestBase {
          logger.info("Repeating {}", repeat);
          AckManager ackManager = AckManagerProvider.getManager(server1);
 
-         Map<SimpleString, LongObjectHashMap<JournalHashMap<AckRetry, AckRetry, Queue>>> sortedRetries = ackManager.sortRetries();
+         Map<SimpleString, LongObjectHashMap<JournalHashMap<Long, AckRetry, AckRetry, Queue>>> sortedRetries = ackManager.sortRetries();
 
          assertEquals(1, sortedRetries.size());
 
-         LongObjectHashMap<JournalHashMap<AckRetry, AckRetry, Queue>> acksOnAddress = sortedRetries.get(c1s1.getAddress());
+         LongObjectHashMap<JournalHashMap<Long, AckRetry, AckRetry, Queue>> acksOnAddress = sortedRetries.get(c1s1.getAddress());
 
          assertEquals(2, acksOnAddress.size());
 
-         JournalHashMap<AckRetry, AckRetry, Queue> acksOnc1s1 = acksOnAddress.get(c1s1.getID());
-         JournalHashMap<AckRetry, AckRetry, Queue> acksOnc2s2 = acksOnAddress.get(c2s2.getID());
+         JournalHashMap<Long, AckRetry, AckRetry, Queue> acksOnc1s1 = acksOnAddress.get(c1s1.getID());
+         JournalHashMap<Long, AckRetry, AckRetry, Queue> acksOnc2s2 = acksOnAddress.get(c2s2.getID());
          assertEquals(numberOfAcksC1, acksOnc1s1.size());
          assertEquals(numberOfAcksC2, acksOnc2s2.size());
 
@@ -217,11 +218,11 @@ public class AckManagerTest extends ActiveMQTestBase {
 
       AckManager ackManager = AckManagerProvider.getManager(server1);
       ackManager.start();
-      Map<SimpleString, LongObjectHashMap<JournalHashMap<AckRetry, AckRetry, Queue>>> sortedRetries = ackManager.sortRetries();
+      Map<SimpleString, LongObjectHashMap<JournalHashMap<Long, AckRetry, AckRetry, Queue>>> sortedRetries = ackManager.sortRetries();
       assertEquals(1, sortedRetries.size());
-      LongObjectHashMap<JournalHashMap<AckRetry, AckRetry, Queue>> acksOnAddress = sortedRetries.get(c1s1.getAddress());
-      JournalHashMap<AckRetry, AckRetry, Queue> acksOnc1s1 = acksOnAddress.get(c1s1.getID());
-      JournalHashMap<AckRetry, AckRetry, Queue> acksOnc2s2 = acksOnAddress.get(c2s2.getID());
+      LongObjectHashMap<JournalHashMap<Long, AckRetry, AckRetry, Queue>> acksOnAddress = sortedRetries.get(c1s1.getAddress());
+      JournalHashMap<Long, AckRetry, AckRetry, Queue> acksOnc1s1 = acksOnAddress.get(c1s1.getID());
+      JournalHashMap<Long, AckRetry, AckRetry, Queue> acksOnc2s2 = acksOnAddress.get(c2s2.getID());
 
       Wait.assertEquals(0, () -> acksOnc1s1.size());
       Wait.assertEquals(0, () -> acksOnc2s2.size());
@@ -407,6 +408,8 @@ public class AckManagerTest extends ActiveMQTestBase {
          session.commit();
       }
 
+      assertTrue(store.isPaging());
+
       ReferenceIDSupplier referenceIDSupplier = new ReferenceIDSupplier(server1);
 
       {
@@ -466,7 +469,10 @@ public class AckManagerTest extends ActiveMQTestBase {
 
       SimpleString QUEUE_NAME = SimpleString.of("queue_" + RandomUtil.randomUUIDString());
 
-      Queue testQueue = server1.createQueue(QueueConfiguration.of(QUEUE_NAME).setRoutingType(RoutingType.ANYCAST));
+      // I need to make sure I read all the messages in memory. Setting maxReadPageMessages will make sure we depage the 200 messages we are going to send
+      server1.getAddressSettingsRepository().addMatch(QUEUE_NAME.toString(), new AddressSettings().setMaxReadPageMessages(200));
+
+      final QueueImpl testQueue = (QueueImpl)server1.createQueue(QueueConfiguration.of(QUEUE_NAME).setRoutingType(RoutingType.ANYCAST));
 
       ConnectionFactory connectionFactory = CFUtil.createConnectionFactory(protocol, "tcp://localhost:61616");
 
@@ -480,7 +486,9 @@ public class AckManagerTest extends ActiveMQTestBase {
                session.commit();
                testQueue.getPagingStore().startPaging();
             }
-            producer.send(session.createTextMessage("hello there " + i));
+            TextMessage message = session.createTextMessage("initial batch " + i);
+            message.setIntProperty("initialBatch", i);
+            producer.send(message);
          }
          session.commit();
       }
@@ -526,9 +534,10 @@ public class AckManagerTest extends ActiveMQTestBase {
       for (int i = 0; i < 100; i++) {
          AmqpMessage message = new AmqpMessage();
          message.setAddress(testQueue.getAddress().toString());
-         message.setText("hello again " + i);
+         message.setText("second batch " + i);
          message.setDeliveryAnnotation(INTERNAL_ID.toString(), server1.getStorageManager().generateID());
          message.setDeliveryAnnotation(INTERNAL_DESTINATION.toString(), testQueue.getAddress().toString());
+         message.setApplicationProperty("secondBatch", i);
          sender.send(message);
       }
       // we should not get any credits
@@ -544,6 +553,10 @@ public class AckManagerTest extends ActiveMQTestBase {
 
       AtomicInteger acked = new AtomicInteger(0);
       ackManager.pause();
+
+      // making sure that reading from paging will place all messages in memory
+      // Since the forEach method will be looking on memory references only
+      Wait.assertEquals(200L, testQueue::getNumberOfReferences, 5000, 100);
 
       // Adding real deletes, we should still flow control credits
       testQueue.forEach(ref -> {
@@ -565,7 +578,8 @@ public class AckManagerTest extends ActiveMQTestBase {
       for (int i = 0; i < 100; i++) {
          AmqpMessage message = new AmqpMessage();
          message.setAddress(testQueue.getAddress().toString());
-         message.setText("one of the last 100");
+         message.setText("last batch " + i);
+         message.setApplicationProperty("lastBatch", i);
          message.setDeliveryAnnotation(INTERNAL_ID.toString(), server1.getStorageManager().generateID());
          message.setDeliveryAnnotation(INTERNAL_DESTINATION.toString(), testQueue.getAddress().toString());
          sender.send(message);

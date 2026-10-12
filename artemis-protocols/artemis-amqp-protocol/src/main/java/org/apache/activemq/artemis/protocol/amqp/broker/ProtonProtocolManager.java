@@ -18,7 +18,6 @@ package org.apache.activemq.artemis.protocol.amqp.broker;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -27,8 +26,6 @@ import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.BaseInterceptor;
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.QueueConfiguration;
-import org.apache.activemq.artemis.api.core.RoutingType;
-import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.core.remoting.impl.netty.NettyServerConnection;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
@@ -80,8 +77,6 @@ public class ProtonProtocolManager extends AbstractProtocolManager<AMQPMessage, 
 
    private final ProtonProtocolManagerFactory factory;
 
-   private final Map<SimpleString, RoutingType> prefixes = new HashMap<>();
-
    /**
     * minLargeMessageSize determines when a message should be considered as large. minLargeMessageSize = -1 basically
     * disables large message control over AMQP.
@@ -102,7 +97,7 @@ public class ProtonProtocolManager extends AbstractProtocolManager<AMQPMessage, 
    // delivery-failed flag set true.
    private boolean amqpTreatRejectAsUnmodifiedDeliveryFailed = AmqpSupport.AMQP_TREAT_REJECT_AS_UNMODIFIED_DELIVERY_FAILURE;
 
-   private int initialRemoteMaxFrameSize = 4 * 1024;
+   private int initialRemoteMaxFrameSize = AmqpSupport.INITIAL_REMOTE_MAX_FRAME_SIZE_DEFAULT;
 
    private String[] saslMechanisms = MechanismFinder.getDefaultMechanisms();
 
@@ -127,6 +122,8 @@ public class ProtonProtocolManager extends AbstractProtocolManager<AMQPMessage, 
    private String pubSubPrefix = DestinationUtil.TOPIC_QUALIFIED_PREFIX;
 
    private int maxFrameSize = AmqpSupport.MAX_FRAME_SIZE_DEFAULT;
+
+   private int maxTransfersPerDelivery = AmqpSupport.DEFAULT_MAX_TRANSFERS_PER_DELIVERY;
 
    public ProtonProtocolManager(ProtonProtocolManagerFactory factory, ActiveMQServer server, List<BaseInterceptor> incomingInterceptors, List<BaseInterceptor> outgoingInterceptors) {
       this.factory = factory;
@@ -361,6 +358,14 @@ public class ProtonProtocolManager extends AbstractProtocolManager<AMQPMessage, 
       this.maxFrameSize = maxFrameSize;
    }
 
+   public int getMaxTransfersPerDelivery() {
+      return maxTransfersPerDelivery;
+   }
+
+   public void setMaxTransfersPerDelivery(int maxTransfersPerDelivery) {
+      this.maxTransfersPerDelivery = maxTransfersPerDelivery;
+   }
+
    public String[] getSaslMechanisms() {
       return saslMechanisms;
    }
@@ -375,25 +380,6 @@ public class ProtonProtocolManager extends AbstractProtocolManager<AMQPMessage, 
 
    public void setSaslLoginConfigScope(String saslLoginConfigScope) {
       this.saslLoginConfigScope = saslLoginConfigScope;
-   }
-
-   @Override
-   public void setAnycastPrefix(String anycastPrefix) {
-      for (String prefix : anycastPrefix.split(",")) {
-         prefixes.put(SimpleString.of(prefix), RoutingType.ANYCAST);
-      }
-   }
-
-   @Override
-   public void setMulticastPrefix(String multicastPrefix) {
-      for (String prefix : multicastPrefix.split(",")) {
-         prefixes.put(SimpleString.of(prefix), RoutingType.MULTICAST);
-      }
-   }
-
-   @Override
-   public Map<SimpleString, RoutingType> getPrefixes() {
-      return prefixes;
    }
 
    @Override

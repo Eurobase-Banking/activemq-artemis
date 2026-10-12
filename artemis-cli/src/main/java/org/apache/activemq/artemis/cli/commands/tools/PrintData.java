@@ -59,9 +59,11 @@ import org.apache.activemq.artemis.core.settings.impl.HierarchicalObjectReposito
 import org.apache.activemq.artemis.spi.core.protocol.MessagePersister;
 import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
+import org.apache.activemq.artemis.utils.TableOut;
 import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.apache.activemq.artemis.utils.collections.LinkedList;
 import org.apache.activemq.artemis.utils.collections.LinkedListIterator;
+import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -83,10 +85,22 @@ public class PrintData extends DBOption {
    @Option(names = "--skip-journal", description = "Do not print data from the messages journal.")
    private boolean skipJournal = false;
 
+   @CommandLine.Option(names = "--ascii", description = "Use ASCII table output style")
+   private boolean ascii = false;
+
    private static final String BINDINGS_BANNER = "B I N D I N G S  J O U R N A L";
    private static final String MESSAGES_BANNER = "M E S S A G E S   J O U R N A L";
    static {
       MessagePersister.registerPersister(CoreMessagePersister.getInstance());
+   }
+
+   public boolean isAscii() {
+      return ascii;
+   }
+
+   public PrintData setAscii(boolean ascii) {
+      this.ascii = ascii;
+      return this;
    }
 
    @Override
@@ -99,7 +113,7 @@ public class PrintData extends DBOption {
          if (configuration.isJDBC()) {
             printDataJDBC(configuration, context.out);
          } else {
-            printData(new File(getBinding()), new File(getJournal()), new File(getPaging()), context.out, safe, reclaimed, skipBindings, skipJournal, maxPages);
+            printData(new File(getBinding()), new File(getJournal()), new File(getPaging()), context.out, safe, reclaimed, skipBindings, skipJournal, maxPages, ascii);
          }
       } catch (Exception e) {
          treatError(e, "data", "print");
@@ -117,13 +131,13 @@ public class PrintData extends DBOption {
 
       printBanner(out, BINDINGS_BANNER);
 
-      DescribeJournal bindings = DescribeJournal.printSurvivingRecords(storageManager.getBindingsJournal(), out, safe);
+      DescribeJournal bindings = DescribeJournal.printSurvivingRecords(storageManager.getBindingsJournal(), out, safe, ascii);
 
       printBanner(out, MESSAGES_BANNER);
 
-      DescribeJournal describeJournal = DescribeJournal.printSurvivingRecords(storageManager.getMessageJournal(), out, safe);
+      DescribeJournal describeJournal = DescribeJournal.printSurvivingRecords(storageManager.getMessageJournal(), out, safe, ascii);
 
-      printPages(describeJournal, storageManager, pagingmanager, out, safe, maxPages, bindings);
+      printPages(describeJournal, storageManager, pagingmanager, out, safe, maxPages, bindings, ascii);
 
       cleanup();
 
@@ -146,6 +160,10 @@ public class PrintData extends DBOption {
    }
 
    public static void printData(File bindingsDirectory, File messagesDirectory, File pagingDirectory, PrintStream out, boolean safe, boolean reclaimed, boolean skipBindings, boolean skipJournal, int maxPages) throws Exception {
+      printData(bindingsDirectory, messagesDirectory, pagingDirectory, out, safe, reclaimed, skipBindings, skipJournal, maxPages, false);
+   }
+
+   public static void printData(File bindingsDirectory, File messagesDirectory, File pagingDirectory, PrintStream out, boolean safe, boolean reclaimed, boolean skipBindings, boolean skipJournal, int maxPages, boolean ascii) throws Exception {
       // printing the banner and version
       Artemis.printBanner(out);
 
@@ -169,7 +187,7 @@ public class PrintData extends DBOption {
          out.println();
          bindingsDescribe = null;
       } else {
-         bindingsDescribe = printBindings(bindingsDirectory, out, safe, true, true, reclaimed);
+         bindingsDescribe = printBindings(bindingsDirectory, out, safe, true, true, reclaimed, ascii);
       }
 
       printBanner(out, MESSAGES_BANNER);
@@ -178,7 +196,7 @@ public class PrintData extends DBOption {
          out.println();
       }
       DescribeJournal describeJournal = null;
-      describeJournal = printMessages(messagesDirectory, out, safe, !skipJournal, !skipJournal, reclaimed);
+      describeJournal = printMessages(messagesDirectory, out, safe, !skipJournal, !skipJournal, reclaimed, ascii);
 
       if (describeJournal == null) {
          return;
@@ -190,7 +208,7 @@ public class PrintData extends DBOption {
             out.println(".... skipping");
             out.println();
          } else {
-            printPages(pagingDirectory, describeJournal, out, safe, maxPages, bindingsDescribe);
+            printPages(pagingDirectory, describeJournal, out, safe, maxPages, bindingsDescribe, ascii);
          }
       } catch (Exception e) {
          e.printStackTrace();
@@ -200,9 +218,13 @@ public class PrintData extends DBOption {
    }
 
    public static DescribeJournal printMessages(File messagesDirectory, PrintStream out, boolean safe, boolean printRecords, boolean printSurviving, boolean reclaimed) {
+      return printMessages(messagesDirectory, out, safe, printRecords, printSurviving, reclaimed, false);
+   }
+
+   public static DescribeJournal printMessages(File messagesDirectory, PrintStream out, boolean safe, boolean printRecords, boolean printSurviving, boolean reclaimed, boolean ascii) {
       DescribeJournal describeJournal;
       try {
-         describeJournal = DescribeJournal.describeMessagesJournal(messagesDirectory, out, safe, printRecords, printSurviving, reclaimed);
+         describeJournal = DescribeJournal.describeMessagesJournal(messagesDirectory, out, safe, printRecords, printSurviving, reclaimed, ascii);
       } catch (Exception e) {
          e.printStackTrace();
          return null;
@@ -211,8 +233,12 @@ public class PrintData extends DBOption {
    }
 
    public static DescribeJournal printBindings(File bindingsDirectory, PrintStream out, boolean safe, boolean printRecords, boolean printSurviving, boolean reclaimed) {
+      return printBindings(bindingsDirectory, out, safe, printRecords, printSurviving, reclaimed, false);
+   }
+
+   public static DescribeJournal printBindings(File bindingsDirectory, PrintStream out, boolean safe, boolean printRecords, boolean printSurviving, boolean reclaimed, boolean ascii) {
       try {
-         return DescribeJournal.describeBindingsJournal(bindingsDirectory, out, safe, printRecords, printSurviving, reclaimed);
+         return DescribeJournal.describeBindingsJournal(bindingsDirectory, out, safe, printRecords, printSurviving, reclaimed, ascii);
       } catch (Exception e) {
          e.printStackTrace();
          return null;
@@ -226,7 +252,7 @@ public class PrintData extends DBOption {
       out.println("********************************************");
    }
 
-   private static void printPages(File pageDirectory, DescribeJournal describeJournal, PrintStream out, boolean safe, int maxPages, DescribeJournal bindingsDescribe) {
+   private static void printPages(File pageDirectory, DescribeJournal describeJournal, PrintStream out, boolean safe, int maxPages, DescribeJournal bindingsDescribe, boolean ascii) {
       ActiveMQThreadFactory daemonFactory = new ActiveMQThreadFactory("cli", true, PrintData.class.getClassLoader());
       final ScheduledExecutorService scheduled = Executors.newScheduledThreadPool(1, daemonFactory);
       final ExecutorService executor = Executors.newFixedThreadPool(10, daemonFactory);
@@ -239,7 +265,7 @@ public class PrintData extends DBOption {
          addressSettingsRepository.setDefault(new AddressSettings());
          PagingManager manager = new PagingManagerImpl(pageStoreFactory, addressSettingsRepository);
 
-         printPages(describeJournal, sm, manager, out, safe, maxPages, bindingsDescribe);
+         printPages(describeJournal, sm, manager, out, safe, maxPages, bindingsDescribe, ascii);
       } catch (Exception e) {
          e.printStackTrace();
       } finally {
@@ -253,7 +279,8 @@ public class PrintData extends DBOption {
                                   PagingManager manager,
                                   PrintStream out,
                                   boolean safe, int maxPages,
-                                  DescribeJournal bindingsDescribe) throws Exception {
+                                  DescribeJournal bindingsDescribe,
+                                  boolean ascii) throws Exception {
       PageCursorsInfo cursorACKs = calculateCursorsInfo(describeJournal.getRecords());
 
       Set<Long> existingQueues = new HashSet<>();
@@ -267,6 +294,9 @@ public class PrintData extends DBOption {
 
       SimpleString[] stores = manager.getStoreNames();
 
+      int[] pageColumnSizes = {10, 10, 12, safe ? 10 : 100, 10};
+      TableOut pageTable = ascii ? null : new TableOut("|", 2, pageColumnSizes);
+
       for (SimpleString store : stores) {
          PagingStore pgStore = manager.getPageStore(store);
          File folder = null;
@@ -278,6 +308,7 @@ public class PrintData extends DBOption {
             long pgid = pgStore.getFirstPage();
 
             out.println("Number of pages ::" + pgStore.getNumberOfPages() + ", Current writing page ::" + pgStore.getCurrentWritingPage());
+
             for (int pg = 0; pg < pgStore.getNumberOfPages(); pg++) {
                if (maxPages >= 0 && pg > maxPages) {
                   out.println("******* Giving up at Page " + pgid + ", System has a total of " + pgStore.getNumberOfPages() + " pages");
@@ -288,34 +319,33 @@ public class PrintData extends DBOption {
                   pgid++;
                   page = pgStore.newPageObject(pgid);
                }
-               out.println("*******   Page " + pgid);
+               if (ascii) {
+                  out.println("*******   Page " + pgid);
+               }
                page.open(false);
                LinkedList<PagedMessage> msgs = page.read(sm);
                page.close(false, false);
 
                int msgID = 0;
 
+               if (pageTable != null) {
+                  pageTable.printTopSeparator(out);
+                  pageTable.print(out, new String[]{"Page", "Msg", "TX", safe ? "Size" : "Message", "Queues"});
+                  pageTable.printSeparator(out);
+               }
                try (LinkedListIterator<PagedMessage> iter = msgs.iterator()) {
                   while (iter.hasNext()) {
                      PagedMessage msg = iter.next();
                      msg.initMessage(sm);
-                     if (safe) {
-                        try {
-                           out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ", msg=" + msg.getMessage().getClass().getSimpleName() + "(safe data, size=" + msg.getMessage().getPersistentSize() + ")");
-                        } catch (Exception e) {
-                           out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ", msg=" + msg.getMessage().getClass().getSimpleName() + "(safe data)");
-                        }
-                     } else {
-                        out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ",userMessageID=" + Objects.requireNonNullElse(msg.getMessage().getUserID(), "") + ", msg=" + msg.getMessage());
-                     }
-                     out.print(",Queues = ");
+
                      long[] q = msg.getQueueIDs();
                      int ackCount = 0;
+
+                     StringBuilder queuesStr = new StringBuilder();
                      for (int i = 0; i < q.length; i++) {
-                        out.print(q[i]);
+                        queuesStr.append(q[i]);
 
                         PagePosition posCheck = new PagePositionImpl(pgid, msgID);
-
                         boolean acked = false;
 
                         Set<PagePosition> positions = cursorACKs.getCursorRecords().get(q[i]);
@@ -324,43 +354,77 @@ public class PrintData extends DBOption {
                         }
 
                         if (acked) {
-                           out.print(" (ACK)");
+                           queuesStr.append(" (ACK)");
                         }
 
                         if (cursorACKs.getCompletePages(q[i]).contains(pgid)) {
                            acked = true;
-                           out.print(" (PG-COMPLETE)");
+                           queuesStr.append(" (PG-COMPLETE)");
                         }
 
                         if (!existingQueues.contains(q[i])) {
-                           out.print(" (N/A) ");
+                           queuesStr.append(" (N/A)");
                            acked = true;
                         }
 
                         if (acked) {
                            ackCount++;
                         } else {
-                           out.print(" (OK) ");
+                           queuesStr.append(" (OK)");
                         }
 
                         if (i + 1 < q.length) {
-                           out.print(",");
+                           queuesStr.append(", ");
                         }
                      }
-                     if (msg.getTransactionID() >= 0 && !pgTXs.contains(msg.getTransactionID())) {
-                        out.print(", **PG_TX_NOT_FOUND**");
-                     }
-                     out.println();
 
-                     if (ackCount != q.length) {
-                        out.println("^^^ Previous record has " + ackCount + " acked queues and " + q.length + " queues routed");
-                        out.println();
+                     if (msg.getTransactionID() >= 0 && !pgTXs.contains(msg.getTransactionID())) {
+                        queuesStr.append(", **PG_TX_NOT_FOUND**");
                      }
+
+                     if (ascii) {
+                        if (safe) {
+                           try {
+                              out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ", msg=" + msg.getMessage().getClass().getSimpleName() + "(safe data, size=" + msg.getMessage().getPersistentSize() + ")");
+                           } catch (Exception e) {
+                              out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ", msg=" + msg.getMessage().getClass().getSimpleName() + "(safe data)");
+                           }
+                        } else {
+                           out.print("pg=" + pgid + ", msg=" + msgID + ",pgTX=" + msg.getTransactionID() + ",userMessageID=" + Objects.requireNonNullElse(msg.getMessage().getUserID(), "") + ", msg=" + msg.getMessage());
+                        }
+                        out.print(",Queues = " + queuesStr);
+                        out.println();
+
+                        if (ackCount != q.length) {
+                           out.println("^^^ Previous record has " + ackCount + " acked queues and " + q.length + " queues routed");
+                           out.println();
+                        }
+                     } else {
+                        String txStr = msg.getTransactionID() >= 0 ? String.valueOf(msg.getTransactionID()) : "";
+                        String msgStr;
+                        if (safe) {
+                           try {
+                              msgStr = msg.getMessage().getClass().getSimpleName() + "(size=" + msg.getMessage().getPersistentSize() + ")";
+                           } catch (Exception e) {
+                              msgStr = msg.getMessage().getClass().getSimpleName() + "(safe data)";
+                           }
+                        } else {
+                           msgStr = String.valueOf(msg.getMessage());
+                        }
+                        pageTable.print(out, new String[]{String.valueOf(pgid), String.valueOf(msgID), txStr, msgStr, queuesStr.toString()});
+                     }
+
                      msgID++;
 
                   }
+
                   pgid++;
                }
+
+               if (pageTable != null) {
+                  pageTable.printBottomSeparator(out);
+               }
+
             }
          }
       }

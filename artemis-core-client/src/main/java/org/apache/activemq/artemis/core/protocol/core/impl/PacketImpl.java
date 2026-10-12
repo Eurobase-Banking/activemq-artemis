@@ -58,6 +58,8 @@ public class PacketImpl implements Packet {
    // 2.37.0
    public static final int ARTEMIS_2_37_0_VERSION = 136;
 
+   public static final int ARTEMIS_2_58_0_VERSION = 137;
+
    public static final SimpleString OLD_QUEUE_PREFIX = SimpleString.of("jms.queue.");
    public static final SimpleString OLD_TEMP_QUEUE_PREFIX = SimpleString.of("jms.tempqueue.");
    public static final SimpleString OLD_TOPIC_PREFIX = SimpleString.of("jms.topic.");
@@ -272,9 +274,29 @@ public class PacketImpl implements Packet {
 
    public static final byte QUORUM_VOTE_REPLY = -3;
 
-   public static final byte CHECK_FOR_FAILOVER = -4;
+   /**
+    * Core connect handshake sent after the transport is established.
+    * Reuses wire packet ID {@code -4}, formerly {@link #CHECK_FOR_FAILOVER}.
+    */
+   public static final byte CONNECT = -4;
 
-   public static final byte CHECK_FOR_FAILOVER_REPLY = -5;
+   /**
+    * @deprecated Renamed to {@link #CONNECT}; retained for the same wire packet ID ({@code -4}).
+    */
+   @Deprecated
+   public static final byte CHECK_FOR_FAILOVER = CONNECT;
+
+   /**
+    * Response to a {@link #CONNECT} packet.
+    * Reuses wire packet ID {@code -5}, formerly {@link #CHECK_FOR_FAILOVER_REPLY}.
+    */
+   public static final byte CONNECT_RESPONSE = -5;
+
+   /**
+    * @deprecated Renamed to {@link #CONNECT_RESPONSE}; retained for the same wire packet ID ({@code -5}).
+    */
+   @Deprecated
+   public static final byte CHECK_FOR_FAILOVER_REPLY = CONNECT_RESPONSE;
 
    public static final byte SCALEDOWN_ANNOUNCEMENT = -6;
 

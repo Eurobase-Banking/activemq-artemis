@@ -958,6 +958,7 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
       String lockId = getString(lockCoordinatorElement, "lock-id", name, NO_CHECK);
       String className = getString(lockCoordinatorElement, "class-name", null, NOT_NULL_OR_EMPTY);
       int checkPeriod = getInteger(lockCoordinatorElement, "check-period", LockCoordinator.DEFAULT_CHECK_PERIOD, NO_CHECK);
+      boolean autoStart = getBooleanAttribute(lockCoordinatorElement, "auto-start", true);
 
       HashMap<String, String> properties = new HashMap<>();
 
@@ -973,7 +974,7 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
          }
       }
 
-      LockCoordinatorConfiguration lockCoordinatorConfiguration = new LockCoordinatorConfiguration(properties).setName(name).setLockId(lockId).setClassName(className).setCheckPeriod(checkPeriod);
+      LockCoordinatorConfiguration lockCoordinatorConfiguration = new LockCoordinatorConfiguration(properties).setName(name).setLockId(lockId).setClassName(className).setCheckPeriod(checkPeriod).setAutoStart(autoStart);
       mainConfig.addLockCoordinatorConfiguration(lockCoordinatorConfiguration);
    }
 
@@ -2345,6 +2346,8 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
          Node item = attributes.item(i);
          if (item.getNodeName().equals("max-hops")) {
             config.setMaxHops(MINUS_ONE_OR_GE_ZERO.validate(item.getNodeName(), Integer.parseInt(item.getNodeValue())).intValue());
+         } else if (item.getNodeName().equals("auto-create")) {
+            config.setAutoCreate(Boolean.parseBoolean(item.getNodeValue()));
          } else if (item.getNodeName().equals("auto-delete")) {
             config.setAutoDelete(Boolean.parseBoolean(item.getNodeValue()));
          } else if (item.getNodeName().equals("auto-delete-delay")) {
@@ -2391,6 +2394,14 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
          Node item = attributes.item(i);
          if (item.getNodeName().equals("include-federated")) {
             config.setIncludeFederated(Boolean.parseBoolean(item.getNodeValue()));
+         } else if (item.getNodeName().equals("auto-create")) {
+            config.setAutoCreate(Boolean.parseBoolean(item.getNodeValue()));
+         } else if (item.getNodeName().equals("auto-delete")) {
+            config.setAutoDelete(Boolean.parseBoolean(item.getNodeValue()));
+         } else if (item.getNodeName().equals("auto-delete-delay")) {
+            config.setAutoDeleteDelay(GE_ZERO.validate("auto-delete-delay", Long.parseLong(item.getNodeValue())).longValue());
+         } else if (item.getNodeName().equals("auto-delete-message-count")) {
+            config.setAutoDeleteMessageCount(MINUS_ONE_OR_GE_ZERO.validate("auto-delete-message-count", Long.parseLong(item.getNodeValue())).longValue());
          } else if (item.getNodeName().equals("priority-adjustment")) {
             config.setPriorityAdjustment(Integer.parseInt(item.getNodeValue()));
          }

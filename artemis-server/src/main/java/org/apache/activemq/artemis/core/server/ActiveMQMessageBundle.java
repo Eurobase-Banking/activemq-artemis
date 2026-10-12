@@ -48,6 +48,7 @@ import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.core.io.SequentialFile;
+import org.apache.activemq.artemis.core.persistence.impl.journal.ActiveMQIDGeneratorStoppedException;
 import org.apache.activemq.artemis.core.postoffice.Binding;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ReplicationSyncFileMessage;
 import org.apache.activemq.artemis.core.security.CheckType;
@@ -130,7 +131,7 @@ public interface ActiveMQMessageBundle {
    @Message(id = 229026, value = "Backup Server was not yet in sync with live")
    ActiveMQIllegalStateException backupServerNotInSync();
 
-   @Message(id = 229027, value = "Could not find reference on consumer ID={}, messageId = {} queue = {}")
+   @Message(id = 229027, value = "Could not find reference on consumerId = {}, messageId = {} queue = {}")
    ActiveMQIllegalStateException consumerNoReference(Long id, Long messageID, SimpleString name);
 
    @Message(id = 229028, value = "Consumer {} doesn't exist on the server")
@@ -533,7 +534,7 @@ public interface ActiveMQMessageBundle {
    IllegalArgumentException positivePowerOfTwo(String name, Number val);
 
    @Message(id = 229257, value = "IDGenerator has been stopped")
-   RuntimeException idGeneratorStopped();
+   ActiveMQIDGeneratorStoppedException idGeneratorStopped();
 
    @Message(id = 229258, value = "Invalid cluster bridge message! No queue IDs defined in the property {}")
    ActiveMQIllegalStateException noQueueIdsDefined(SimpleString idsHeaderName);
@@ -544,4 +545,12 @@ public interface ActiveMQMessageBundle {
    @Message(id = 229260, value = "Wildcard addresses are not supported on producers. Only on consumers. Please send to a real address. {}")
    ActiveMQException wildcardOnProducerNotSupported(String val);
 
+   @Message(id = 229261, value = "Authentication mechanism not supported: {}")
+   ActiveMQSecurityException authenticationMechanismNotSupported(String authMechanism);
+
+   @Message(id = 229262, value = "Broadcast groups are disabled by default. See the Server Discovery section in the user manual for security requirements and enablement.")
+   ActiveMQIllegalStateException broadcastGroupsConfiguredButDisabled();
+
+   @Message(id = 229263, value = "Discovery groups are disabled by default. See the Server Discovery section in the user manual for security requirements and enablement.")
+   ActiveMQIllegalStateException discoveryGroupsConfiguredButDisabled();
 }

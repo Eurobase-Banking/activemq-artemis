@@ -217,7 +217,6 @@ import org.apache.activemq.artemis.utils.TimeUtils;
 import org.apache.activemq.artemis.utils.UUID;
 import org.apache.activemq.artemis.utils.VersionLoader;
 import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
-import org.apache.activemq.artemis.utils.collections.ConcurrentHashSet;
 import org.apache.activemq.artemis.utils.critical.CriticalAction;
 import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
 import org.apache.activemq.artemis.utils.critical.CriticalAnalyzerImpl;
@@ -365,15 +364,15 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
    private final Map<String, BrokerConnection> brokerConnectionMap = new ConcurrentHashMap<>();
 
-   private final Set<ActivateCallback> activateCallbacks = new ConcurrentHashSet<>();
+   private final Set<ActivateCallback> activateCallbacks = ConcurrentHashMap.newKeySet();
 
-   private final Set<ActivationFailureListener> activationFailureListeners = new ConcurrentHashSet<>();
+   private final Set<ActivationFailureListener> activationFailureListeners = ConcurrentHashMap.newKeySet();
 
-   private final Set<IOCriticalErrorListener> ioCriticalErrorListeners = new ConcurrentHashSet<>();
+   private final Set<IOCriticalErrorListener> ioCriticalErrorListeners = ConcurrentHashMap.newKeySet();
 
-   private final Set<PostQueueCreationCallback> postQueueCreationCallbacks = new ConcurrentHashSet<>();
+   private final Set<PostQueueCreationCallback> postQueueCreationCallbacks = ConcurrentHashMap.newKeySet();
 
-   private final Set<PostQueueDeletionCallback> postQueueDeletionCallbacks = new ConcurrentHashSet<>();
+   private final Set<PostQueueDeletionCallback> postQueueDeletionCallbacks = ConcurrentHashMap.newKeySet();
 
    private volatile GroupingHandler groupingHandler;
 
@@ -392,7 +391,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
    private final ActiveMQServer parentServer;
 
-   private CriticalAnalyzer analyzer;
+   private volatile CriticalAnalyzer analyzer;
 
    // This is a callback to be called right before an activation is created
    private Runnable afterActivationCreated;
@@ -719,6 +718,8 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       configuration.parseProperties(propertiesFileUrl);
       updateStatus(ServerStatus.CONFIGURATION_COMPONENT, configuration.getStatus());
 
+      ConfigurationUtils.validateStartupConfiguration(configuration);
+
       initializeExecutorServices();
 
       initializeCriticalAnalyzer();
@@ -761,7 +762,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
          ActiveMQServerLogger.LOGGER.serverStarting((haPolicy.isBackup() ? "Backup" : "Primary"), configuration);
 
-         startLockCoordinators();
+         createLockCoordinators();
 
          final boolean wasPrimary = !haPolicy.isBackup();
          if (!haPolicy.isBackup()) {
@@ -821,7 +822,15 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       }
    }
 
-   private void startLockCoordinators() {
+   /**
+    * Instantiates the configured lock managers and creates the {@link LockCoordinator}s, making them available
+    * through {@link #getLockCoordinator(String)} for acceptors and broker connections to look up by name. This runs
+    * unconditionally on every {@link #internalStart()}, well before the server is activated, so the coordinators
+    * must exist here for that lookup to succeed. It does NOT start polling for the lock: that only happens once the
+    * server actually becomes active, in {@link #startLockCoordinators()}, called from {@link #completeActivation}.
+    * Otherwise a passive backup (or any node that hasn't been chosen to activate) would contend for the lock too.
+    */
+   private void createLockCoordinators() {
       for (LockCoordinatorConfiguration lockCoordinatorConfiguration : configuration.getLockCoordinatorConfigurations()) {
          String className = lockCoordinatorConfiguration.getClassName();
          String name = lockCoordinatorConfiguration.getName();
@@ -838,9 +847,24 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          }
 
          LockCoordinator lockCoordinator = new LockCoordinator(scheduledPool, executorFactory.getExecutor(), checkPeriod, lockManager, lockId, name);
+         lockCoordinator.setAutoStart(lockCoordinatorConfiguration.isAutoStart());
          lockCoordinators.put(name, lockCoordinator);
-         ActiveMQServerLogger.LOGGER.lockCoordinatorStarting(name, className, lockId, checkPeriod);
-         lockCoordinator.start();
+      }
+   }
+
+   /**
+    * Starts polling for the distributed lock on every created {@link LockCoordinator} configured with
+    * {@code auto-start=true} (the default) that isn't already started. Called from {@link #completeActivation} so
+    * that only the node that actually became active contends for the lock; a coordinator configured with
+    * {@code auto-start=false} is left stopped until it's started explicitly through management
+    * ({@code startLockCoordinator}).
+    */
+   private void startLockCoordinators() {
+      for (LockCoordinator lockCoordinator : lockCoordinators.values()) {
+         if (lockCoordinator.isAutoStart() && !lockCoordinator.isStarted()) {
+            ActiveMQServerLogger.LOGGER.lockCoordinatorStarting(lockCoordinator.getName(), lockCoordinator.getLockManager().getClass().getName(), lockCoordinator.getLockId(), lockCoordinator.getPeriod());
+            lockCoordinator.start();
+         }
       }
    }
 
@@ -867,8 +891,6 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          } else {
             analyzer = EmptyCriticalAnalyzer.getInstance();
          }
-
-         this.analyzer = analyzer;
       }
 
       /*
@@ -934,6 +956,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       };
 
       analyzer.addAction(criticalAction);
+      this.analyzer = analyzer;
    }
 
    private static void checkCriticalAnalyzerLogging() {
@@ -3688,7 +3711,11 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
    private void startProtocolServices() throws Exception {
       for (ProtocolManagerFactory protocolManagerFactory : protocolManagerFactories) {
-         protocolManagerFactory.loadProtocolServices(this, protocolServices);
+         try {
+            protocolManagerFactory.loadProtocolServices(this, protocolServices);
+         } catch (Exception e) {
+            logger.warn("Unable to load protocol services for: {}", protocolManagerFactory.getProtocols(), e);
+         }
       }
 
       for (ActiveMQComponent protocolComponent : protocolServices) {
@@ -3733,6 +3760,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
             }
          }
       }
+      startLockCoordinators();
       getRemotingService().startAcceptors();
       activationLatch.countDown();
       callActivationCompleteCallbacks();

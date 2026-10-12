@@ -83,7 +83,6 @@ import org.apache.activemq.artemis.spi.core.protocol.ConnectionEntry;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.utils.UUIDGenerator;
 import org.apache.activemq.artemis.utils.actors.ThresholdActor;
-import org.apache.activemq.artemis.utils.collections.ConcurrentHashSet;
 import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.command.ActiveMQMessage;
 import org.apache.activemq.command.ActiveMQTempQueue;
@@ -139,6 +138,11 @@ import org.slf4j.LoggerFactory;
  */
 public class OpenWireConnection extends AbstractRemotingConnection implements SecurityAuth, TempResourceObserver {
 
+   private static final Set<Class<? extends Command>> PRE_AUTHENTICATION_ALLOWED_SET;
+
+   static {
+      PRE_AUTHENTICATION_ALLOWED_SET = Set.of(WireFormatInfo.class, ConnectionControl.class, ConnectionInfo.class);
+   }
 
    private final Object lockSend = new Object();
 
@@ -203,7 +207,7 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
    private long maxInactivityDuration;
    private volatile ThresholdActor<Command> openWireActor;
 
-   private final Set<SimpleString> knownDestinations = new ConcurrentHashSet<>();
+   private final Set<SimpleString> knownDestinations = ConcurrentHashMap.newKeySet();
 
    private final AtomicBoolean disableTtl = new AtomicBoolean(false);
 
@@ -339,7 +343,6 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
       }
    }
 
-
    private void act(Command command) {
       try {
          recoverOperationContext();
@@ -351,6 +354,15 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
          if (this.protocolManager.invokeIncoming(command, this) != null) {
             logger.debug("Interceptor rejected OpenWire command: {}", command);
             disconnect(true);
+            return;
+         }
+
+         // Any command that isn't expected to arrive before a connection create event from
+         // the ConnectionInfo should just fail the connection as we only support well behaved
+         // client connections, not other bridged ActiveMQ brokers.
+         if (state == null && !PRE_AUTHENTICATION_ALLOWED_SET.contains(command.getClass())) {
+            logger.debug("Rejecting OpenWire connection that sent unexpected command before authentication: {}", command);
+            shutdown(true);
             return;
          }
 
@@ -379,9 +391,10 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
                   serviceException(cause);
                   response = null;
                }
-               // If there was an exception when processing ConnectionInfo we should
-               // stop the connection to prevent dangling sockets
-               if (command instanceof ConnectionInfo) {
+               // If there was an exception when processing ConnectionInfo or any other command
+               // that arrives before a connection info exchange triggers an error we should stop
+               // the connection to prevent dangling sockets
+               if (command instanceof ConnectionInfo || state == null) {
                   delayedStop(2000, cause.getMessage(), cause);
                }
             }
@@ -1339,8 +1352,24 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
 
       @Override
       public Response processRemoveSubscription(RemoveSubscriptionInfo subInfo) throws Exception {
-         SimpleString subQueueName = org.apache.activemq.artemis.jms.client.ActiveMQDestination.createQueueNameForSubscription(true, subInfo.getClientId(), subInfo.getSubscriptionName());
-         server.destroyQueue(subQueueName);
+         final ConnectionState cs = getState();
+         final ServerSession ss = internalSession;
+
+         if (cs == null || ss == null) {
+            throw new IllegalStateException("Cannot remove a subscription on a connection that had not been registered");
+         }
+
+         if (!Objects.equals(cs.getInfo().getConnectionId(), subInfo.getConnectionId())) {
+            throw new IllegalStateException("Rejecting remove subscription command with invalid data");
+         }
+
+         if (!Objects.equals(cs.getInfo().getClientId(), subInfo.getClientId())) {
+            throw new IllegalStateException("Rejecting remove subscription command with invalid data");
+         }
+
+         final SimpleString subQueueName = org.apache.activemq.artemis.jms.client.ActiveMQDestination.createQueueNameForSubscription(true, subInfo.getClientId(), subInfo.getSubscriptionName());
+
+         ss.deleteQueue(subQueueName);
 
          return null;
       }

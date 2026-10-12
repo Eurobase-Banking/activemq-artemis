@@ -30,21 +30,28 @@ import javax.jms.MessageProducer;
 import javax.jms.Queue;
 import javax.jms.Session;
 import javax.jms.TextMessage;
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.activemq.artemis.spi.core.protocol.EmbedMessageUtil;
 import org.apache.activemq.artemis.tests.compatibility.base.ClasspathBase;
 import org.apache.activemq.artemis.tests.extensions.parameterized.ParameterizedTestExtension;
 import org.apache.activemq.artemis.tests.extensions.parameterized.Parameters;
+import org.apache.activemq.artemis.utils.FileUtil;
 import org.apache.qpid.jms.JmsConnectionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @ExtendWith(ParameterizedTestExtension.class)
 public class MultiVersionReplicaTest extends ClasspathBase {
+
+   private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
    private static final String QUEUE_NAME = "MultiVersionReplicaTestQueue";
 
@@ -54,34 +61,55 @@ public class MultiVersionReplicaTest extends ClasspathBase {
    private final String backup;
    private final ClassLoader backupClassLoader;
 
+   private boolean security;
 
 
-   @Parameters(name = "main={0}, backup={1}")
+   public void downgradeEmbedWireVersion() {
+      System.setProperty("org.apache.artemis.amqp.embed.wire.version", "1");
+      EmbedMessageUtil.setDefaultWireVersion(EmbedMessageUtil.EMBED_WIRE_VERSION_1);
+   }
+
+   // Cleanup wire version downgrade in case it was applied
+   @AfterEach
+   public void cleanupDowngradeEmbedWireVersion() {
+      System.clearProperty("org.apache.artemis.amqp.embed.wire.version");
+      EmbedMessageUtil.setDefaultWireVersion(EmbedMessageUtil.EMBED_WIRE_VERSION_2);
+   }
+
+
+   @Parameters(name = "main={0}, backup={1}, security={2}")
    public static Collection getParameters() {
       List<Object[]> combinations = new ArrayList<>();
 
       if (getJavaVersion() <= 22) {
          // Old 2.x servers fail on JDK23+ without workarounds.
-         combinations.add(new Object[]{ARTEMIS_2_22_0, SNAPSHOT});
-         combinations.add(new Object[]{SNAPSHOT, ARTEMIS_2_22_0});
-         combinations.add(new Object[]{ARTEMIS_2_17_0, SNAPSHOT});
-         combinations.add(new Object[]{SNAPSHOT, ARTEMIS_2_17_0});
+         combinations.add(new Object[]{ARTEMIS_2_22_0, SNAPSHOT, true});
+         combinations.add(new Object[]{ARTEMIS_2_17_0, SNAPSHOT, true});
+         combinations.add(new Object[]{ARTEMIS_2_22_0, SNAPSHOT, false});
+         combinations.add(new Object[]{ARTEMIS_2_17_0, SNAPSHOT, false});
       }
 
-      combinations.add(new Object[]{ARTEMIS_2_44_0, SNAPSHOT});
-      combinations.add(new Object[]{SNAPSHOT, ARTEMIS_2_44_0});
+      combinations.add(new Object[]{ARTEMIS_2_44_0, SNAPSHOT, true});
+      combinations.add(new Object[]{ARTEMIS_2_44_0, SNAPSHOT, false});
+
+      // Retro-compatibility is best-effort only. These lines currently work,
+      // but can be removed if they become problematic.
+      combinations.add(new Object[]{SNAPSHOT, ARTEMIS_2_44_0, true});
+      combinations.add(new Object[]{SNAPSHOT, ARTEMIS_2_44_0, false});
 
       // The SNAPSHOT/SNAPSHOT is here as a test validation only, like in other cases where SNAPSHOT/SNAPSHOT is used.
-      combinations.add(new Object[]{SNAPSHOT, SNAPSHOT});
+      combinations.add(new Object[]{SNAPSHOT, SNAPSHOT, true});
+      combinations.add(new Object[]{SNAPSHOT, SNAPSHOT, false});
       return combinations;
    }
 
-   public MultiVersionReplicaTest(String main, String backup) throws Exception {
+   public MultiVersionReplicaTest(String main, String backup, boolean security) throws Exception {
       this.main = main;
       this.mainClassloader = getClasspath(main);
 
       this.backup = backup;
       this.backupClassLoader = getClasspath(backup);
+      this.security = security;
    }
 
    @AfterEach
@@ -99,10 +127,19 @@ public class MultiVersionReplicaTest extends ClasspathBase {
 
    @TestTemplate
    public void testReplica() throws Throwable {
+      if (main.equals(SNAPSHOT) && !main.equals(backup)) {
+         // Downgrading wire version for retro-compatibility between snapshot and older versions
+         // as a best effort to allow compatibility during an upgrade
+         downgradeEmbedWireVersion();
+      }
+
+      FileUtil.deleteDirectory(serverFolder.getAbsoluteFile());
       System.out.println("Starting live");
-      evaluate(mainClassloader, "multiVersionReplica/mainServer.groovy", serverFolder.getAbsolutePath(), "1", "61000", "61001");
+      // To ensure backward compatibility, core connection security must be disabled on newer live brokers so legacy backup brokers can connect.
+      boolean coreConnectionSecurity = security && (!SNAPSHOT.equals(main) || SNAPSHOT.equals(backup));
+      evaluate(mainClassloader, "multiVersionReplica/mainServer.groovy", serverFolder.getAbsolutePath(), "1", "61000", "61001", String.valueOf(security), String.valueOf(coreConnectionSecurity));
       System.out.println("Starting backup");
-      evaluate(backupClassLoader, "multiVersionReplica/backupServer.groovy", serverFolder.getAbsolutePath(), "2", "61001", "61000");
+      evaluate(backupClassLoader, "multiVersionReplica/backupServer.groovy", serverFolder.getAbsolutePath(), "2", "61001", "61000", String.valueOf(security));
 
       evaluate(mainClassloader, "multiVersionReplica/mainServerIsReplicated.groovy");
 
@@ -120,7 +157,7 @@ public class MultiVersionReplicaTest extends ClasspathBase {
 
 
    private void send(ConnectionFactory factory, int numberOfMessagesTx, int numberOfMessagesNonTx) throws Throwable {
-      try (Connection connection = factory.createConnection()) {
+      try (Connection connection = factory.createConnection("admin", "admin")) {
          Queue queue;
 
          {
@@ -153,7 +190,7 @@ public class MultiVersionReplicaTest extends ClasspathBase {
    }
 
    private void receive(ConnectionFactory factory, int numberOfMessages) throws Throwable {
-      try (Connection connection = factory.createConnection()) {
+      try (Connection connection = factory.createConnection("admin", "admin")) {
          Session session = connection.createSession(true, Session.SESSION_TRANSACTED);
          Queue queue = session.createQueue(QUEUE_NAME);
          connection.start();

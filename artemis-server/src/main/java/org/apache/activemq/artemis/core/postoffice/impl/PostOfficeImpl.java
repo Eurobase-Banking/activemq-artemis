@@ -1051,7 +1051,8 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
       }
    }
 
-   private void deleteDuplicateCache(SimpleString address) throws Exception {
+   @Override
+   public void deleteDuplicateCache(SimpleString address) throws Exception {
       DuplicateIDCache cache = duplicateIDCaches.remove(address);
 
       if (cache != null) {
@@ -1367,6 +1368,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
          status = RoutingStatus.NO_BINDINGS;
          logger.debug("Message {} is not going anywhere as it didn't have a binding on address:{}", message, address);
          if (message.isLargeMessage()) {
+            message.setDropped(true);
             ((LargeServerMessage) message).deleteFile();
          }
       }
@@ -1473,6 +1475,11 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
 
    private int resolveIdCacheSize(SimpleString address) {
       return Objects.requireNonNullElse(addressSettingsRepository.getMatch(address.toString()).getIDCacheSize(), idCacheSize);
+   }
+
+   @Override
+   public boolean duplicateIDCacheExists(final SimpleString address) {
+      return duplicateIDCaches.containsKey(address);
    }
 
    @Override
@@ -1638,7 +1645,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
       }
    }
 
-   private static class PageDelivery extends TransactionOperationAbstract {
+   private static class PageDeliveryOperation extends TransactionOperationAbstract {
 
       private final Set<Queue> queues = new HashSet<>();
 
@@ -1700,9 +1707,17 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
          }
 
          if (store != null && storageManager.addToPage(store, message, context.getTransaction(), entry.getValue())) {
-            // We need to kick delivery so the Queues may check for the cursors case they are empty
-            schedulePageDelivery(tx, entry);
+            if (!message.isDropped()) {
+               // we schedule prefetch checks when messages are added
+               schedulePageDelivery(tx, entry);
+            }
             continue;
+         }
+
+         if (message.isDropped()) {
+            // this should never happen
+            // adding defensive code just in case
+            throw new IllegalStateException("Paging returned false (NOT_PAGED) for a dropped message");
          }
 
          final List<Queue> nonDurableQueues = entry.getValue().getNonDurableQueues();
@@ -1725,11 +1740,19 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
          }
       }
 
+      if (message.isDropped()) {
+         if (startedTX) {
+            // the transaction here should be empty
+            // calling rollback just for correctness
+            tx.rollback();
+         }
+         return;
+      }
+
       if (mirrorControllerSource != null && !context.isMirrorDisabled()) {
          // we check for isMirrorDisabled as to avoid recursive loop from there
          mirrorControllerSource.sendMessage(tx, message, context);
       }
-
 
       if (tx != null) {
          tx.addOperation(new AddOperation(refs));
@@ -1826,15 +1849,9 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
     */
    private void schedulePageDelivery(Transaction tx, Map.Entry<SimpleString, RouteContextList> entry) {
       if (tx != null) {
-         PageDelivery delivery = (PageDelivery) tx.getProperty(TransactionPropertyIndexes.PAGE_DELIVERY);
-         if (delivery == null) {
-            delivery = new PageDelivery();
-            tx.putProperty(TransactionPropertyIndexes.PAGE_DELIVERY, delivery);
-            tx.addOperation(delivery);
-         }
-
-         delivery.addQueues(entry.getValue().getDurableQueues());
-         delivery.addQueues(entry.getValue().getNonDurableQueues());
+         PageDeliveryOperation pageDeliveryOperation = tx.getOrCreateOperation(TransactionPropertyIndexes.PAGE_DELIVERY, PageDeliveryOperation::new);
+         pageDeliveryOperation.addQueues(entry.getValue().getDurableQueues());
+         pageDeliveryOperation.addQueues(entry.getValue().getNonDurableQueues());
       } else {
 
          List<Queue> durableQueues = entry.getValue().getDurableQueues();

@@ -40,7 +40,7 @@ public abstract class ParameterDBTestBase extends DBTestBase {
    private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
    @Override
-   protected void dropDerby() throws Exception {
+   protected void dropEmbeddedDatabases() throws Exception {
       cleanupData(database.getName());
    }
 
@@ -79,8 +79,8 @@ public abstract class ParameterDBTestBase extends DBTestBase {
    public void setUp() throws Exception {
       super.setUp();
       disableCheckThread();
-      if (database == Database.DERBY) {
-         runAfter(this::shutdownDerby);
+      if (database == Database.HSQL) {
+         runAfter(this::shutdownEmbeddedDatabases);
       }
 
       registerDB();
@@ -102,6 +102,15 @@ public abstract class ParameterDBTestBase extends DBTestBase {
       }
    }
 
+   @Override
+   protected String getJDBCUser() {
+      return database == Database.HSQL ? super.getJDBCUser() : null;
+   }
+
+   @Override
+   protected String getJDBCPassword() {
+      return database == Database.HSQL ? super.getJDBCPassword() : null;
+   }
 
    protected static List<Object[]> convertParameters(List<Database> dbList) {
       List<Object[]> parameters = new ArrayList<>();
@@ -133,12 +142,12 @@ public abstract class ParameterDBTestBase extends DBTestBase {
 
       return switch (database) {
          case JOURNAL -> 0;
-         case DERBY -> {
+         case HSQL -> {
             try {
-               logger.info("Drop derby");
-               dropDerby();
+               logger.info("Drop HSQL");
+               dropEmbeddedDatabases();
             } catch (Exception e) {
-               logger.debug("Error dropping derby db: {}", e.getMessage());
+               logger.debug("Error dropping HSQL db: {}", e.getMessage());
             }
             yield 1;
          }

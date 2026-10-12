@@ -62,7 +62,7 @@ public class SimpleManagement implements AutoCloseable {
    public SimpleManagement open() throws Exception {
       if (session == null) {
          locator = ServerLocatorImpl.newLocator(uri);
-         sessionFactory = locator.createSessionFactory();
+         sessionFactory = locator.createSessionFactory(user, password);
          session = sessionFactory.createSession(user, password, false, true, true, false, ActiveMQClient.DEFAULT_ACK_BATCH_SIZE);
       }
       return this;
@@ -105,8 +105,28 @@ public class SimpleManagement implements AutoCloseable {
       return simpleManagementBoolean("broker", "isReplicaSync");
    }
 
+   public void startLockCoordinator(String lockName) throws Exception {
+      simpleManagementVoid("broker", "startLockCoordinator", lockName);
+   }
+
+   public void stopLockCoordinator(String lockName) throws Exception {
+      simpleManagementVoid("broker", "stopLockCoordinator", lockName);
+   }
+
    public void rebuildPageCounters() throws Exception {
       simpleManagementVoid("broker", "rebuildPageCounters");
+   }
+
+   public long getAddressSize(String address) throws Exception {
+      return simpleManagementLong(ResourceNames.ADDRESS + address, "getAddressSize");
+   }
+
+   public long getMessageCountOnAddress(String address) throws Exception {
+      return simpleManagementLong(ResourceNames.ADDRESS + address, "getMessageCount");
+   }
+
+   public int removeMessagesOnQueue(String queue, String filter) throws Exception {
+      return simpleManagementInt(ResourceNames.QUEUE + queue, "removeMessages", filter);
    }
 
    /**
